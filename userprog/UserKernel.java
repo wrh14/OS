@@ -12,7 +12,8 @@ public class UserKernel extends ThreadedKernel {
      * Allocate a new user kernel.
      */
     public UserKernel() {
-    super();
+        super();
+        physicalPageManager = new PhysicalPageManager(Machine.processor().getNumPhysPages());
     }
 
     /**
@@ -106,6 +107,41 @@ public class UserKernel extends ThreadedKernel {
     public void terminate() {
     super.terminate();
     }
+
+    public class PhysicalPageManager{
+        public PhysicalPageManager(int numPage){
+            availPages = new int[numPage];
+            availPointer = numPage - 1;
+            for(int i = 0; i < numPage; i++){
+                availPages[i] = i;
+            }
+        }
+
+        public int getPage(){
+            Lib.assertTrue(availPointer >= 0);
+            boolean status = Machine.interrupt().disable();
+            int res = availPages[availPointer];
+            availPointer --;
+            Machine.interrupt().restore(status);
+            return res;
+        }
+
+        public void addFreePage(int pageId){
+            boolean status = Machine.interrupt().disable();
+            availPages[availPointer + 1] = pageId;
+            availPointer ++;
+            Machine.interrupt().restore(status);
+        }
+
+        public int getAvailPointer(){
+            return availPointer;
+        }
+
+        private int availPointer;
+        private int[] availPages;
+    }
+
+    public static PhysicalPageManager physicalPageManager;
 
     /** Globally accessible reference to the synchronized console. */
     public static SynchConsole console;

@@ -6,6 +6,8 @@ import nachos.userprog.*;
 
 import java.io.EOFException;
 
+import java.util.LinkedList;
+
 /**
  * Encapsulates the state of a user process that is not contained in its
  * user thread (or threads). This includes its address translation state, a
@@ -23,6 +25,26 @@ public class UserProcess {
      * Allocate a new process.
      */
     public UserProcess() {
+        createStdIO();
+        UserKernel.newProcess(this);
+    }
+
+    public void createStdIO() {
+        FileDescriptor fd;
+
+        fd = fdl.allocate();
+        fd.filename = "__STDIN__";
+        fd.openFile = UserKernel.console.openForReading();
+
+        Lib.assertTrue(fd.id == FileDescriptorList.STDIN);
+        Lib.assertTrue(fd.openFile != null);
+
+        fd = fdl.allocate();
+        fd.filename = "__STDOUT__";
+        fd.openFile = UserKernel.console.openForWriting();
+
+        Lib.assertTrue(fd.id == FileDescriptorList.STDOUT);
+        Lib.assertTrue(fd.openFile != null);
     }
     
     /**
@@ -45,12 +67,12 @@ public class UserProcess {
      * @return  <tt>true</tt> if the program was successfully executed.
      */
     public boolean execute(String name, String[] args) {
-    if (!load(name, args))
-        return false;
-    
-    new UThread(this).setName(name).fork();
+        if (!load(name, args))
+            return false;
+        this.controlThread = new UThread(this);
+        this.controlThread.setName(name).fork();
 
-    return true;
+        return true;
     }
 
     /**
@@ -583,6 +605,11 @@ public class UserProcess {
         }
 
         String filename = readVirtualMemoryString(a0, maxStrLen);
+        if (argc < 0 || argv <= 0) {
+            Lib.debug(dbgProcess, "Exec: invalid argc < 0.");
+            return -1;
+        }
+
         if (filename == null) {
             Lib.debug(dbgProcess, "Exec: invalid filename.");
             return -1;
@@ -590,11 +617,6 @@ public class UserProcess {
 
         if (!filename.endsWith(".coff")) {
             Lib.debug(dbgProcess, "Exec: invalid filename, should ends with `.coff`.");
-            return -1;
-        }
-
-        if (argc < 0 || argv <= 0) {
-            Lib.debug(dbgProcess, "Exec: invalid argc < 0.");
             return -1;
         }
 
@@ -616,11 +638,70 @@ public class UserProcess {
         }
 
         UserProcess p = UserProcess.newUserProcess();
-        //p.ppid = pid;
-        //children.add(p.pid);
+        p.ppid = pid;
+        children.add(p.pid);
 
         boolean rc = p.execute(filename, strArgv);
         return rc ? p.pid : -1;
+    }
+
+    private int handleJoin(int childPid, int statusBuf) {
+        boolean isChild = false;
+        for (int pid : children) {
+            if (pid == childPid) {
+                isChild = true;
+                break;
+            }
+        }
+
+        if (!isChild || statusBuf <= 0) {
+            Lib.debug(dbgProcess, "Join: invalid child pid.");
+            return -1;
+        }
+
+        children.remove(new Integer(childPid));
+        UserProcess p = UserKernel.getProcess(childPid);
+        if (p == null){
+            return -1;
+        }
+        p.controlThread.join();
+        UserKernel.freeProcess(p);
+
+        byte byteStatus[] = Lib.bytesFromInt(p.statusExit);
+        int statusBytes = writeVirtualMemory(statusBuf, byteStatus);
+        if (statusBytes != 4) {
+            return -1;
+        }
+        return 0;
+    }
+
+    private int handleExit(int status) {
+        // Close all file descriptors
+        for (FileDescriptor fd : fdl.getAll()) {
+            if (!fd.isNull()) {
+                handleClose(fd.id);
+            }
+        }
+
+        // All children
+        while (!children.isEmpty()) {
+            int childPid = children.removeFirst();
+            UserProcess p = UserKernel.getProcess(childPid);
+            p.ppid = UserKernel.getRootPid();
+        }
+
+        // Unload sections
+        this.unloadSections();
+        this.statusExit = status;
+
+        if (this.pid == UserKernel.getRootPid()) {
+            Kernel.kernel.terminate();
+        } else {
+            KThread.currentThread().finish();
+        }
+
+        Lib.assertNotReached();
+        return 0;
     }
 
     private static final int
@@ -681,6 +762,10 @@ public class UserProcess {
         return handleUnlink(a0);
     case syscallExec:
         return handleExec(a0, a1, a2);
+    case syscallExit:
+        return handleExit(a0);
+    case syscallJoin:
+        return handleJoin(a0, a1);
 
     default:
         System.out.println(syscall);
@@ -743,6 +828,8 @@ public class UserProcess {
 
     public class FileDescriptorList{
         static final int fdMaxNum = 16;
+        static final int STDIN = 0;
+        static final int STDOUT = 1;
         private FileDescriptor []fdList = new FileDescriptor[fdMaxNum];
 
         public FileDescriptorList(){
@@ -809,8 +896,17 @@ public class UserProcess {
     
     private int initialPC, initialSP;
     private int argc, argv;
+
+    public int pid = 0;
+    public int ppid = 0;
+
+    public int statusExit;
+
+    public LinkedList<Integer> children = new LinkedList<Integer>();
     
     private static final int pageSize = Processor.pageSize;
     private static final char dbgProcess = 'a';
     private static final int maxStrLen = 256;
+
+    private UThread controlThread;
 }

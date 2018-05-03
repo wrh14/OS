@@ -1,5 +1,7 @@
 package nachos.userprog;
 
+import java.util.HashMap;
+
 import nachos.machine.*;
 import nachos.threads.*;
 import nachos.userprog.*;
@@ -141,6 +143,37 @@ public class UserKernel extends ThreadedKernel {
         private int[] availPages;
     }
 
+    public static void newProcess(UserProcess p) {
+        boolean savedInterrupt = Machine.interrupt().disable();
+        int pid = nextPid;
+        nextPid++;
+        if (rootPid == -1) {
+            rootPid = pid;
+        }
+        p.pid = pid;
+        processes.put(pid, p);
+        Machine.interrupt().restore(savedInterrupt);
+    }
+
+    public static void freeProcess(UserProcess p) {
+        boolean savedInterrupt = Machine.interrupt().disable();
+        processes.remove(p.pid);
+        Machine.interrupt().restore(savedInterrupt);
+    }
+
+    public static UserProcess getProcess(int pid) {
+        return processes.get(pid);
+    }
+
+    public static int getRootPid() {
+        Lib.assertTrue(rootPid != -1);
+        return rootPid;
+    }
+
+    public static HashMap<Integer, UserProcess> processes = new HashMap<Integer, UserProcess>();
+
+    public static int rootPid = -1;
+
     public static PhysicalPageManager physicalPageManager;
 
     /** Globally accessible reference to the synchronized console. */
@@ -148,4 +181,6 @@ public class UserKernel extends ThreadedKernel {
 
     // dummy variables to make javac smarter
     private static Coff dummy1 = null;
+
+    private static int nextPid = 0;
 }
